@@ -118,29 +118,34 @@ def main(ticker, end_date):
 
         # Predict the close price for the next 10 trading days
         last_60_days = scaled_data[-60:]
-        last_60_days = np.reshape(last_60_days, (1, last_60_days.shape[0], last_60_days.shape[1]))
+        last_60_days = np.reshape(last_60_days,
+                                  (1, last_60_days.shape[0], last_60_days.shape[1]))  # Shape should be (1, 60, 5)
         predicted_prices = []
 
         for _ in range(predict_days):
-            next_prediction = model.predict(last_60_days)
-            predicted_prices.append(next_prediction[0, 0])
+            next_prediction = model.predict(last_60_days)  # This gives us a 2D array of shape (1, 1)
+            predicted_prices.append(next_prediction[0, 0])  # Get the scalar value from shape (1, 1)
 
             # Create a new row with the predicted value and zeros for other features
             new_row = np.zeros((1, 1, last_60_days.shape[2]))
             new_row[0, 0, 0] = next_prediction[0, 0]  # Set the predicted value for the 'Close' feature
             last_60_days = np.append(last_60_days[:, 1:, :], new_row, axis=1)
 
-        # First, ensure predicted_prices is a 1D array
-        predicted_prices = np.array(predicted_prices).flatten()  # Flatten if it's not 1D already
+        # Convert the list of predictions into a 1D array
+        predicted_prices = np.array(predicted_prices).flatten()  # Flatten to ensure it's 1D
 
-        # Create a 2D array with 5 columns (the original feature set) and 'n' rows (predicted values)
-        dummy_array = np.zeros((len(predicted_prices), 5))
+        # Create a dummy array with 5 columns
+        dummy_array = np.zeros((len(predicted_prices), 5))  # 5 columns for the feature set
+        dummy_array[:, 0] = predicted_prices  # Insert predicted 'Close' prices into the 'Close' column
 
-        # Insert the predicted 'Close' prices into the 'Close' column (column 0)
-        dummy_array[:, 0] = predicted_prices  # This makes sure only the 'Close' column is populated
+        # Perform inverse transformation on the dummy array (which now has shape (n_samples, 5))
+        inverse_transformed = scaler.inverse_transform(dummy_array)
 
-        # Print shape of dummy_array to ensure it's 2D with 5 columns
-        print("Shape of dummy_array before inverse transform:", dummy_array.shape)
+        # Extract the 'Close' prices (first column) after inverse transformation
+        predicted_prices_inversed = inverse_transformed[:, 0]  # First column contains the predicted Close prices
+
+        # Print the final predicted prices
+        print("Predicted Prices after Inverse Transform:", predicted_prices_inversed)
 
         # Perform inverse transformation on the dummy array with the correct shape (5 columns)
         inverse_transformed = scaler.inverse_transform(dummy_array)
