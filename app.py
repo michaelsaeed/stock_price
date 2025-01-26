@@ -130,12 +130,12 @@ def main(ticker, end_date):
             new_row[0, 0, 0] = next_prediction[0, 0]  # Set the predicted value for the 'Close' feature
             last_60_days = np.append(last_60_days[:, 1:, :], new_row, axis=1)
 
-        # Ensure predicted_prices is 2D
-        predicted_prices_reshaped = np.array(predicted_prices).reshape(-1, 1)
+        # Flatten predicted prices to ensure a 1D array
+        predicted_prices_flat = np.array(predicted_prices).flatten()
 
-        # Create a dummy array with 5 columns, where only the first column is filled with predicted prices
-        dummy_array = np.zeros((len(predicted_prices_reshaped), 5))  # Array with 5 columns
-        dummy_array[:, 0] = predicted_prices_reshaped.flatten()  # Insert predicted prices into the 'Close' column
+        # Create a dummy array with 5 columns where the first column is populated with predicted prices
+        dummy_array = np.zeros((len(predicted_prices_flat), 5))  # Array with 5 columns
+        dummy_array[:, 0] = predicted_prices_flat  # Insert predicted prices into the first column (Close)
 
         # Perform inverse transformation on the dummy array
         inverse_transformed = scaler.inverse_transform(dummy_array)
@@ -143,7 +143,7 @@ def main(ticker, end_date):
         # Extract the 'Close' prices (first column) after inverse transformation
         predicted_prices = inverse_transformed[:, 0]
 
-        # Check the final predicted prices array shape
+        # Debugging - Check the final shape of the predicted prices
         print("Final predicted prices shape:", predicted_prices.shape)
 
         # Calculate the target date (10 trading days after the end date)
