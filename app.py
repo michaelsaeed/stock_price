@@ -134,20 +134,11 @@ def main(ticker, end_date):
         dummy_array = np.zeros((len(predicted_prices), 5))  # Array with 5 columns
         dummy_array[:, 0] = np.array(predicted_prices).reshape(-1)  # Insert predicted prices into the 'Close' column
 
-        # Check the shape of dummy_array
-        print("Shape of dummy_array before inverse transform:", dummy_array.shape)
-
         # Perform inverse transformation on the dummy array
         inverse_transformed = scaler.inverse_transform(dummy_array)
 
-        # Check the shape after inverse transform
-        print("Shape of inverse_transformed:", inverse_transformed.shape)
-
         # Extract the 'Close' price after inverse transformation from the first column
         predicted_prices = inverse_transformed[:, 0]
-
-        # Check the final predicted prices array shape
-        print("Final predicted prices shape:", predicted_prices.shape)
 
         # Calculate the target date (10 trading days after the end date)
         target_date = calculate_future_trading_date(end_date, predict_days)
