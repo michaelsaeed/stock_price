@@ -47,7 +47,10 @@ def preprocess_data(data):
         raise ValueError(f"Input data must contain the following columns: {required_columns}")
 
     # Add technical indicators
-    data = add_all_ta_features(data, open="Open", high="High", low="Low", close="Close", volume="Volume", fillna=True)
+    data = add_all_ta_features(
+        data,
+        open="Open", high="High", low="Low", close="Close", volume="Volume", fillna=True
+    )
 
     # Select relevant features
     features = ['Close', 'volume_adi', 'trend_macd', 'momentum_rsi', 'volatility_bbm']
