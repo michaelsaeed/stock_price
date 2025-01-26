@@ -131,9 +131,11 @@ def main(ticker, end_date):
             last_60_days = np.append(last_60_days[:, 1:, :], new_row, axis=1)
 
         # Create a dummy array with 5 features for inverse transformation
-        dummy_array = np.zeros((len(predicted_prices), 5))
-        dummy_array[:, 0] = np.array(predicted_prices).reshape(-1)  # Set the 'Close' feature
-        predicted_prices = scaler.inverse_transform(dummy_array)[:, 0]  # Inverse transform and extract 'Close' prices
+        dummy_array = np.zeros((len(predicted_prices), 5))  # Create an array with 5 features
+        dummy_array[:, 0] = np.array(predicted_prices).reshape(-1)  # Set the 'Close' feature (1st column)
+
+        # Inverse transform and extract 'Close' prices
+        predicted_prices = scaler.inverse_transform(dummy_array)[:, 0]
 
         # Calculate the target date (10 trading days after the end date)
         target_date = calculate_future_trading_date(end_date, predict_days)
