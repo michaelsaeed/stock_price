@@ -46,6 +46,10 @@ def preprocess_data(data):
     if not all(col in data.columns for col in required_columns):
         raise ValueError(f"Input data must contain the following columns: {required_columns}")
 
+    # Flatten columns to ensure 1D arrays
+    for col in required_columns:
+        data[col] = data[col].values.flatten()
+
     # Add technical indicators
     data = add_all_ta_features(
         data,
