@@ -27,13 +27,33 @@ def load_stock_data(ticker, end_date, years=1):
     start_date = pd.to_datetime(end_date) - pd.DateOffset(years=years)
     adjusted_end_date = (pd.to_datetime(end_date) + timedelta(days=1)).strftime('%Y-%m-%d')
     data = yf.download(ticker, start=start_date, end=adjusted_end_date)
+
+    # Check if data is empty or incomplete
+    if data.empty:
+        raise ValueError(f"No data found for ticker: {ticker}")
+    if len(data) < 60:  # Ensure enough data points for LSTM
+        raise ValueError(f"Insufficient data for ticker: {ticker}. At least 60 data points are required.")
+
     return data
 
 def preprocess_data(data):
     """Preprocess the stock data with additional features."""
+    # Drop rows with missing values
+    data = data.dropna()
+
+    # Ensure all required columns are present
+    required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+    if not all(col in data.columns for col in required_columns):
+        raise ValueError(f"Input data must contain the following columns: {required_columns}")
+
+    # Add technical indicators
     data = add_all_ta_features(data, open="Open", high="High", low="Low", close="Close", volume="Volume", fillna=True)
+
+    # Select relevant features
     features = ['Close', 'volume_adi', 'trend_macd', 'momentum_rsi', 'volatility_bbm']
     data = data[features]
+
+    # Normalize the data
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(data)
     return scaled_data, scaler
@@ -69,57 +89,61 @@ def calculate_future_trading_date(start_date, trading_days):
     return current_date
 
 def main(ticker, end_date):
-    # Load stock data
-    stock_data = load_stock_data(ticker, end_date)
+    try:
+        # Load stock data
+        stock_data = load_stock_data(ticker, end_date)
 
-    # Preprocess data
-    scaled_data, scaler = preprocess_data(stock_data)
+        # Preprocess data
+        scaled_data, scaler = preprocess_data(stock_data)
 
-    # Create training dataset
-    X, y = create_dataset(scaled_data)
+        # Create training dataset
+        X, y = create_dataset(scaled_data)
 
-    # Split data into training and validation sets
-    train_size = int(len(X) * 0.8)
-    X_train, X_val = X[:train_size], X[train_size:]
-    y_train, y_val = y[:train_size], y[train_size:]
+        # Split data into training and validation sets
+        train_size = int(len(X) * 0.8)
+        X_train, X_val = X[:train_size], X[train_size:]
+        y_train, y_val = y[:train_size], y[train_size:]
 
-    # Build and train the LSTM model
-    model = build_lstm_model()
-    early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
-    model.fit(X_train, y_train, validation_data=(X_val, y_val), batch_size=32, epochs=50, callbacks=[early_stopping], verbose=1)
+        # Build and train the LSTM model
+        model = build_lstm_model()
+        early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+        model.fit(X_train, y_train, validation_data=(X_val, y_val), batch_size=32, epochs=50, callbacks=[early_stopping], verbose=1)
 
-    # Predict the close price for the next 10 trading days
-    last_60_days = scaled_data[-60:]
-    last_60_days = np.reshape(last_60_days, (1, last_60_days.shape[0], last_60_days.shape[1]))
-    predicted_prices = []
+        # Predict the close price for the next 10 trading days
+        last_60_days = scaled_data[-60:]
+        last_60_days = np.reshape(last_60_days, (1, last_60_days.shape[0], last_60_days.shape[1]))
+        predicted_prices = []
 
-    for _ in range(predict_days):
-        next_prediction = model.predict(last_60_days)
-        predicted_prices.append(next_prediction[0, 0])
+        for _ in range(predict_days):
+            next_prediction = model.predict(last_60_days)
+            predicted_prices.append(next_prediction[0, 0])
 
-        # Create a new row with the predicted value and zeros for other features
-        new_row = np.zeros((1, 1, last_60_days.shape[2]))
-        new_row[0, 0, 0] = next_prediction[0, 0]  # Set the predicted value for the 'Close' feature
-        last_60_days = np.append(last_60_days[:, 1:, :], new_row, axis=1)
+            # Create a new row with the predicted value and zeros for other features
+            new_row = np.zeros((1, 1, last_60_days.shape[2]))
+            new_row[0, 0, 0] = next_prediction[0, 0]  # Set the predicted value for the 'Close' feature
+            last_60_days = np.append(last_60_days[:, 1:, :], new_row, axis=1)
 
-    # Create a dummy array with 5 features for inverse transformation
-    dummy_array = np.zeros((len(predicted_prices), 5))
-    dummy_array[:, 0] = np.array(predicted_prices).reshape(-1)  # Set the 'Close' feature
-    predicted_prices = scaler.inverse_transform(dummy_array)[:, 0]  # Inverse transform and extract 'Close' prices
+        # Create a dummy array with 5 features for inverse transformation
+        dummy_array = np.zeros((len(predicted_prices), 5))
+        dummy_array[:, 0] = np.array(predicted_prices).reshape(-1)  # Set the 'Close' feature
+        predicted_prices = scaler.inverse_transform(dummy_array)[:, 0]  # Inverse transform and extract 'Close' prices
 
-    # Calculate the target date (10 trading days after the end date)
-    target_date = calculate_future_trading_date(end_date, predict_days)
+        # Calculate the target date (10 trading days after the end date)
+        target_date = calculate_future_trading_date(end_date, predict_days)
 
-    # Get the close price on the end date
-    close_price_end_date = stock_data.loc[str(end_date), 'Close']
+        # Get the close price on the end date
+        close_price_end_date = stock_data.loc[str(end_date), 'Close']
 
-    # Display the result
-    st.write(f"Close Price on {end_date}: {close_price_end_date:.2f}")
-    st.write(f"Predicted Price on {target_date.strftime('%Y-%m-%d')}: {predicted_prices[-1]:.2f}")
-    if predicted_prices[-1] > close_price_end_date:
-        st.write("**UP**")
-    else:
-        st.write("**DOWN**")
+        # Display the result
+        st.write(f"Close Price on {end_date}: {close_price_end_date:.2f}")
+        st.write(f"Predicted Price on {target_date.strftime('%Y-%m-%d')}: {predicted_prices[-1]:.2f}")
+        if predicted_prices[-1] > close_price_end_date:
+            st.write("**UP**")
+        else:
+            st.write("**DOWN**")
+
+    except Exception as e:
+        st.error(f"An error occurred: {str(e)}")
 
 # Run the app
 if __name__ == "__main__":
