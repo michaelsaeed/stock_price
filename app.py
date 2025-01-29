@@ -50,7 +50,7 @@ data['SMA_50'] = ta.sma(data['Close'], length=50)
 data['SMA_200'] = ta.sma(data['Close'], length=200)
 data['EMA_17'] = ta.ema(data['Close'], length=17)
 data['RSI_14'] = ta.rsi(data['Close'], length=14)
-data['Momentum'] = ta.mom(data['Close'], length=1)
+#data['Momentum'] = ta.mom(data['Close'], length=1)
 data['Volume'] = data['Volume']
 
 # Drop rows with NaN values
@@ -61,7 +61,8 @@ data = data.copy()
 
 # Prepare data for prediction
 data['Days'] = (data.index - data.index[0]).days
-X = data[['Days', 'SMA_50', 'SMA_200', 'EMA_17', 'RSI_14', 'Momentum', 'Volume']]
+#X = data[['Days', 'SMA_50', 'SMA_200', 'EMA_17', 'RSI_14', 'Momentum', 'Volume']]
+X = data[['Days', 'SMA_50', 'SMA_200', 'EMA_17', 'RSI_14', 'Volume']]
 y = data['Close']
 
 # Normalize the features (X) and target (y) separately
