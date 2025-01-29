@@ -1,179 +1,136 @@
-import numpy as np
+import yfinance as yf
 import pandas as pd
+import pandas_ta as ta
+import numpy as np
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import MinMaxScaler
 from keras.models import Sequential
-from keras.layers import Dense, LSTM, Dropout, Bidirectional
+from keras.layers import LSTM, Dense
 from keras.optimizers import Adam
-from keras.callbacks import EarlyStopping
-import yfinance as yf
+from keras_tuner import RandomSearch
 from datetime import datetime, timedelta
-from ta import add_all_ta_features
-import warnings
 import streamlit as st
 
-# Suppress the specific warning
-warnings.filterwarnings("ignore", category=FutureWarning, module="ta.trend")
+def get_second_friday(start_date):
+    """Find the second Friday after a given date."""
+    days_until_friday = (4 - start_date.weekday()) % 7
+    first_friday = start_date + timedelta(days=days_until_friday)
+    second_friday = first_friday + timedelta(days=7)
+    return second_friday
 
-# Streamlit app title
-st.title("Stock Price Prediction App")
+# Streamlit App
+st.title("Stock Price Prediction using LSTM")
 
-# User inputs
-ticker = st.text_input("Enter the stock ticker (e.g., AAPL):", "AAPL")
-end_date = st.date_input("Enter the end date (YYYY-MM-DD):", datetime.today())
-predict_days = 10
+# Inputs for ticker and end_date
+ticker = st.text_input("Enter the stock ticker symbol (e.g., AAPL):", value="ASTS")
+end_date = st.date_input("Select the end date:", value=datetime(2024, 10, 16))
 
-def load_stock_data(ticker, end_date, years=1):
-    """Load the last 'years' years of stock data from Yahoo Finance."""
-    start_date = pd.to_datetime(end_date) - pd.DateOffset(years=years)
-    adjusted_end_date = (pd.to_datetime(end_date) + timedelta(days=1)).strftime('%Y-%m-%d')
-    data = yf.download(ticker, start=start_date, end=adjusted_end_date)
+# Convert end_date to datetime
+end_date = datetime.combine(end_date, datetime.min.time())
 
-    # Check if data is empty or incomplete
-    if data.empty:
-        raise ValueError(f"No data found for ticker: {ticker}")
-    if len(data) < 60:  # Ensure enough data points for LSTM
-        raise ValueError(f"Insufficient data for ticker: {ticker}. At least 60 data points are required.")
+# Calculate start_date (12 months prior)
+start_date = end_date - timedelta(days=365)
 
-    return data
+# Download stock data using yfinance
+st.write(f"Downloading data for {ticker} from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
+data = yf.download(ticker, start=start_date, end=end_date + timedelta(days=1))
 
-def preprocess_data(data):
-    """Preprocess the stock data with additional features."""
-    # Drop rows with missing values
-    data = data.dropna()
+# Handle cases where data is not available for the exact end_date
+if end_date not in data.index:
+    closest_date = data.index[data.index <= end_date][-1]
+else:
+    closest_date = end_date
 
-    # Ensure all required columns are present
-    required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-    if not all(col in data.columns for col in required_columns):
-        raise ValueError(f"Input data must contain the following columns: {required_columns}")
+# Extract the actual close price on or before the end_date
+close_price_end_date = data.loc[closest_date, 'Close']
 
-    # Convert columns to 1D arrays
-    for col in required_columns:
-        data[col] = data[col].values.ravel()  # Convert to 1D array
+# Calculate technical indicators using pandas_ta
+data['SMA_50'] = ta.sma(data['Close'], length=50)
+data['SMA_200'] = ta.sma(data['Close'], length=200)
+data['EMA_17'] = ta.ema(data['Close'], length=17)
+data['RSI_14'] = ta.rsi(data['Close'], length=14)
+data['Momentum'] = ta.mom(data['Close'], length=1)
+data['Volume'] = data['Volume']
 
-    # Add technical indicators
-    data = add_all_ta_features(
-        data,
-        open="Open", high="High", low="Low", close="Close", volume="Volume", fillna=True
-    )
+# Drop rows with NaN values
+data = data.dropna()
 
-    # Select relevant features
-    features = ['Close', 'volume_adi', 'trend_macd', 'momentum_rsi', 'volatility_bbm']
-    data = data[features]
+# Ensure data is a copy of the DataFrame
+data = data.copy()
 
-    # Normalize the data
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(data)
-    return scaled_data, scaler
+# Prepare data for prediction
+data['Days'] = (data.index - data.index[0]).days
+X = data[['Days', 'SMA_50', 'SMA_200', 'EMA_17', 'RSI_14', 'Momentum', 'Volume']]
+y = data['Close']
 
-def create_dataset(data, time_step=60):
-    """Create the dataset for LSTM."""
-    X, y = [], []
-    for i in range(len(data) - time_step - 1):
-        X.append(data[i:i + time_step, :])
-        y.append(data[i + time_step, 0])
-    return np.array(X), np.array(y)
+# Normalize the features (X) and target (y) separately
+scaler_X = MinMaxScaler()
+X_scaled = scaler_X.fit_transform(X)
 
-def build_lstm_model():
-    """Build and compile the LSTM model."""
+scaler_y = MinMaxScaler()
+y_scaled = scaler_y.fit_transform(y.values.reshape(-1, 1))
+
+# Reshape data for LSTM [samples, time steps, features]
+X_scaled = X_scaled.reshape((X_scaled.shape[0], 1, X_scaled.shape[1]))
+
+# TimeSeriesSplit for cross-validation
+tscv = TimeSeriesSplit(n_splits=5)
+
+# Hyperparameter Tuning with Keras Tuner
+def build_model(hp):
     model = Sequential()
-    model.add(Bidirectional(LSTM(100, return_sequences=True), input_shape=(60, 5)))
-    model.add(Dropout(0.2))
-    model.add(Bidirectional(LSTM(100, return_sequences=False)))
-    model.add(Dropout(0.2))
-    model.add(Dense(50))
+    model.add(LSTM(units=hp.Int('units', min_value=50, max_value=200, step=50),
+                   return_sequences=True, input_shape=(X_scaled.shape[1], X_scaled.shape[2])))
+    model.add(LSTM(units=hp.Int('units', min_value=50, max_value=200, step=50), return_sequences=False))
+    model.add(Dense(units=hp.Int('dense_units', min_value=25, max_value=100, step=25), activation='relu'))
     model.add(Dense(1))
-    model.compile(optimizer=Adam(learning_rate=0.001), loss='mean_squared_error')
+    model.compile(optimizer=Adam(learning_rate=hp.Choice('learning_rate', values=[1e-2, 1e-3, 1e-4])),
+                  loss='mean_squared_error')
     return model
 
-def calculate_future_trading_date(start_date, trading_days):
-    """Calculate the future trading date by skipping weekends."""
-    current_date = pd.to_datetime(start_date)
-    added_days = 0
-    while added_days < trading_days:
-        current_date += timedelta(days=1)
-        if current_date.weekday() < 5:  # Skip Saturday (5) and Sunday (6)
-            added_days += 1
-    return current_date
+st.write("Performing hyperparameter tuning...")
+tuner = RandomSearch(
+    build_model,
+    objective='val_loss',
+    max_trials=5,
+    executions_per_trial=2,
+    directory='tuner_results',
+    project_name='stock_price_prediction'
+)
 
-def main(ticker, end_date):
-    try:
-        # Load stock data
-        stock_data = load_stock_data(ticker, end_date)
+# Perform hyperparameter tuning
+tuner.search(X_scaled, y_scaled, epochs=20, validation_split=0.2, verbose=1)
 
-        # Preprocess data
-        scaled_data, scaler = preprocess_data(stock_data)
+# Get the best model
+best_model = tuner.get_best_models(num_models=1)[0]
 
-        # Create training dataset
-        X, y = create_dataset(scaled_data)
+# Cross-Validation
+st.write("Performing cross-validation...")
+for train_index, test_index in tscv.split(X_scaled):
+    X_train, X_test = X_scaled[train_index], X_scaled[test_index]
+    y_train, y_test = y_scaled[train_index], y_scaled[test_index]
+    best_model.fit(X_train, y_train, epochs=20, batch_size=32, validation_data=(X_test, y_test), verbose=1)
 
-        # Split data into training and validation sets
-        train_size = int(len(X) * 0.8)
-        X_train, X_val = X[:train_size], X[train_size:]
-        y_train, y_val = y[:train_size], y[train_size:]
+# Get the second Friday after end_date
+second_friday = get_second_friday(end_date)
 
-        # Build and train the LSTM model
-        model = build_lstm_model()
-        early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
-        model.fit(X_train, y_train, validation_data=(X_val, y_val), batch_size=32, epochs=50, callbacks=[early_stopping], verbose=1)
+# Calculate the number of days from the start_date to the second Friday
+target_day = (second_friday - data.index[0]).days
 
-        # Predict the close price for the next 10 trading days
-        last_60_days = scaled_data[-60:]
-        last_60_days = np.reshape(last_60_days,
-                                  (1, last_60_days.shape[0], last_60_days.shape[1]))  # Shape should be (1, 60, 5)
-        predicted_prices = []
+# Prepare the feature vector for prediction
+target_features = pd.DataFrame([[target_day, data['SMA_50'].iloc[-1], data['SMA_200'].iloc[-1], data['EMA_17'].iloc[-1], data['RSI_14'].iloc[-1], data['Momentum'].iloc[-1], data['Volume'].iloc[-1]]],
+                                columns=['Days', 'SMA_50', 'SMA_200', 'EMA_17', 'RSI_14', 'Momentum', 'Volume'])
 
-        for _ in range(predict_days):
-            next_prediction = model.predict(last_60_days)  # This gives us a 2D array of shape (1, 1)
-            predicted_prices.append(next_prediction[0, 0])  # Get the scalar value from shape (1, 1)
+# Normalize the target features using scaler_X
+target_features_scaled = scaler_X.transform(target_features)
+target_features_scaled = target_features_scaled.reshape((target_features_scaled.shape[0], 1, target_features_scaled.shape[1]))
 
-            # Create a new row with the predicted value and zeros for other features
-            new_row = np.zeros((1, 1, last_60_days.shape[2]))
-            new_row[0, 0, 0] = next_prediction[0, 0]  # Set the predicted value for the 'Close' feature
-            last_60_days = np.append(last_60_days[:, 1:, :], new_row, axis=1)
+# Predict the close price for the second Friday
+predicted_close_price_scaled = best_model.predict(target_features_scaled)
+predicted_close_price_target_date = scaler_y.inverse_transform(predicted_close_price_scaled)[0][0]
 
-        # Convert the list of predictions into a 1D array
-        predicted_prices = np.array(predicted_prices).flatten()  # Flatten to ensure it's 1D
-
-        # Create a dummy array with 5 columns
-        dummy_array = np.zeros((len(predicted_prices), 5))  # 5 columns for the feature set
-        dummy_array[:, 0] = predicted_prices  # Insert predicted 'Close' prices into the 'Close' column
-
-        # Perform inverse transformation on the dummy array (which now has shape (n_samples, 5))
-        inverse_transformed = scaler.inverse_transform(dummy_array)
-
-        # Extract the 'Close' prices (first column) after inverse transformation
-        predicted_prices_inversed = inverse_transformed[:, 0]  # First column contains the predicted Close prices
-
-        # Print the final predicted prices
-        print("Predicted Prices after Inverse Transform:", predicted_prices_inversed)
-
-        # Perform inverse transformation on the dummy array with the correct shape (5 columns)
-        inverse_transformed = scaler.inverse_transform(dummy_array)
-
-        # Extract the 'Close' prices (the first column) after inverse transformation
-        predicted_prices_inversed = inverse_transformed[:, 0]  # Extract the Close column after inverse transformation
-
-        # Print the final predicted prices
-        print("Predicted Prices after Inverse Transform:", predicted_prices_inversed)
-
-        # Calculate the target date (10 trading days after the end date)
-        target_date = calculate_future_trading_date(end_date, predict_days)
-
-        # Get the close price on the end date
-        close_price_end_date = stock_data.loc[str(end_date), 'Close']
-
-        # Display the result
-        st.write(f"Close Price on {end_date}: {close_price_end_date:.2f}")
-        st.write(f"Predicted Price on {target_date.strftime('%Y-%m-%d')}: {predicted_prices[-1]:.2f}")
-        if predicted_prices[-1] > close_price_end_date:
-            st.write("**UP**")
-        else:
-            st.write("**DOWN**")
-
-    except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
-
-# Run the app
-if __name__ == "__main__":
-    if st.button("Predict"):
-        main(ticker, end_date)
+# Display results in Streamlit
+st.write(f"End Date: {end_date.strftime('%Y-%m-%d')}")
+st.write(f"Actual Close Price on End Date ({closest_date.strftime('%Y-%m-%d')}): {close_price_end_date:.2f}")
+st.write(f"Second Friday: {second_friday.strftime('%Y-%m-%d')}")
+st.write(f"Predicted Close Price on Second Friday ({second_friday.strftime('%Y-%m-%d')}): {predicted_close_price_target_date:.2f}")

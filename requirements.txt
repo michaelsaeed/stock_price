@@ -5,3 +5,6 @@ tensorflow
 yfinance
 ta
 streamlit
+sklearn
+pandas_ta
+datetime
