@@ -2,7 +2,7 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
-npNaN = np.nan
+#npNaN = np.nan
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import MinMaxScaler
 from keras.models import Sequential
